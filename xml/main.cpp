@@ -216,21 +216,13 @@ bool runCalibrationAndSave(Settings& s, Size imageSize, Mat&  cameraMatrix, Mat&
 
 static void readCameraParams();
 
-void split_left_right_frame_stereo_frame(cv::Mat stereo_frame, cv::Mat &left, cv::Mat &right, int w, int h){
-	left = stereo_frame(Rect(0, 0, w, h));
-	right = stereo_frame(Rect(w, 0, w, h));
-}
-
 int main(int argc, char* argv[])
 {
-	int width  = 640;
-	int height = 400;
-
 	readCameraParams();
 	namedWindow("Image View",1);
     help();
     Settings s;
-    const string inputSettingsFile = argc > 1 ? argv[1] : "xml/camera_calibration.xml";
+    const string inputSettingsFile = argc > 1 ? argv[1] : "camera_calibration.xml";
     FileStorage fs(inputSettingsFile, FileStorage::READ); // Read the settings
     if (!fs.isOpened())
     {
@@ -246,21 +238,13 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-	vector<vector<Point2f> > l_imagePoints;
-	vector<vector<Point2f> > r_imagePoints;
     vector<vector<Point2f> > imagePoints;
-
     Mat cameraMatrix, distCoeffs;
-	Mat l_cameraMatrix, l_distCoeffs;
-	Mat r_cameraMatrix, r_distCoeffs;
-
     Size imageSize;
     int mode = s.inputType == Settings::IMAGE_LIST ? CAPTURING : DETECTION;
     clock_t prevTimestamp = 0;
     const Scalar RED(0,0,255), GREEN(0,255,0);
     const char ESC_KEY = 27;
-
-	cv::Mat left, right;
 
     for(int i = 0;;++i)
     {
@@ -270,16 +254,9 @@ int main(int argc, char* argv[])
 		view = s.nextImage();
 
 		//-----  If no more image, or got enough, then stop calibration and show result -------------
-		/*if( mode == CAPTURING && imagePoints.size() >= (unsigned)s.nrFrames )
+		if( mode == CAPTURING && imagePoints.size() >= (unsigned)s.nrFrames )
 		{
 			if( runCalibrationAndSave(s, imageSize,  cameraMatrix, distCoeffs, imagePoints))
-				mode = CALIBRATED;
-			else
-				mode = DETECTION;
-		}*/
-		if( mode == CAPTURING && l_imagePoints.size() >= (unsigned)s.nrFrames ){
-			if( runCalibrationAndSave(s, imageSize,  l_cameraMatrix, l_distCoeffs, l_imagePoints) && 
-				runCalibrationAndSave(s, imageSize,  r_cameraMatrix, r_distCoeffs, r_imagePoints))
 				mode = CALIBRATED;
 			else
 				mode = DETECTION;
@@ -292,49 +269,51 @@ int main(int argc, char* argv[])
 			continue;
 		}
 
+        imageSize = view.size();  // Format input image.
         if( s.flipVertical )    flip( view, view, 0 );
 
-		//split left right img from stereo frame
-		split_left_right_frame_stereo_frame(view, left, right, width, height);
+        vector<Point2f> pointBuf;
 
-		imageSize = left.size();  // Format input image.
+        bool found;
+        switch( s.calibrationPattern ) // Find feature points on the input format
+        {
+        case Settings::CHESSBOARD:
+            found = findChessboardCorners( view, s.boardSize, pointBuf,
+                CV_CALIB_CB_ADAPTIVE_THRESH | CV_CALIB_CB_FAST_CHECK | CV_CALIB_CB_NORMALIZE_IMAGE);
+            break;
+        case Settings::CIRCLES_GRID:
+            found = findCirclesGrid( view, s.boardSize, pointBuf );
+            break;
+        case Settings::ASYMMETRIC_CIRCLES_GRID:
+            found = findCirclesGrid( view, s.boardSize, pointBuf, CALIB_CB_ASYMMETRIC_GRID );
+            break;
+        default:
+            found = false;
+            break;
+        }
 
-		vector<Point2f> l_pointBuf;
-		vector<Point2f> r_pointBuf;
-
-		bool l_found = findChessboardCorners( left , s.boardSize, l_pointBuf,
-												CV_CALIB_CB_ADAPTIVE_THRESH | CV_CALIB_CB_FAST_CHECK | CV_CALIB_CB_NORMALIZE_IMAGE);
-		bool r_found = findChessboardCorners( right, s.boardSize, r_pointBuf,
-												CV_CALIB_CB_ADAPTIVE_THRESH | CV_CALIB_CB_FAST_CHECK | CV_CALIB_CB_NORMALIZE_IMAGE);
-
-		if (l_found && r_found)                // If both found
-		{
+        if (found)                // If done with success,
+        {
 			// improve the found corners' coordinate accuracy for chessboard
-			Mat l_viewGray;
-			Mat r_viewGray;
-
-			cvtColor(left , l_viewGray, COLOR_BGR2GRAY);
-			cvtColor(right, r_viewGray, COLOR_BGR2GRAY);
-
-			cornerSubPix( l_viewGray, l_pointBuf, Size(11,11),
-				Size(-1,-1), TermCriteria( CV_TERMCRIT_EPS+CV_TERMCRIT_ITER, 30, 0.1 ));
-			cornerSubPix( r_viewGray, r_pointBuf, Size(11,11),
-				Size(-1,-1), TermCriteria( CV_TERMCRIT_EPS+CV_TERMCRIT_ITER, 30, 0.1 ));
-
-			// For camera only take new samples after delay time
-			l_imagePoints.push_back(l_pointBuf);
-			r_imagePoints.push_back(r_pointBuf);
-			prevTimestamp = clock();
-			blinkOutput = s.inputCapture.isOpened();
-
-			//draw
-			vector<Point2f> shift_r_pointBuf;
-			for ( Point2f &i : r_pointBuf ) {
-				shift_r_pointBuf.push_back(Point2f(i.x+width, i.y));
+			if( s.calibrationPattern == Settings::CHESSBOARD)
+			{
+				Mat viewGray;
+				cvtColor(view, viewGray, COLOR_BGR2GRAY);
+				cornerSubPix( viewGray, pointBuf, Size(11,11),
+					Size(-1,-1), TermCriteria( CV_TERMCRIT_EPS+CV_TERMCRIT_ITER, 30, 0.1 ));
 			}
-			drawChessboardCorners( view, s.boardSize, Mat(l_pointBuf), true );
-			drawChessboardCorners( view, s.boardSize, Mat(shift_r_pointBuf), true );
-		}
+
+			if( mode == CAPTURING &&  // For camera only take new samples after delay time
+				(!s.inputCapture.isOpened() || clock() - prevTimestamp > s.delay*1e-3*CLOCKS_PER_SEC) )
+			{
+				imagePoints.push_back(pointBuf);
+				prevTimestamp = clock();
+				blinkOutput = s.inputCapture.isOpened();
+			}
+
+			// Draw the corners.
+			drawChessboardCorners( view, s.boardSize, Mat(pointBuf), found );
+        }
 
         //----------------------------- Output Text ------------------------------------------------
         string msg = (mode == CAPTURING) ? "100/100" :
@@ -359,19 +338,8 @@ int main(int argc, char* argv[])
         //------------------------- Video capture  output  undistorted ------------------------------
         if( mode == CALIBRATED && s.showUndistorsed )
         {
-            Mat tmp_l = left.clone();
-			Mat tmp_r = right.clone();
-            
-			undistort(left , tmp_l, l_cameraMatrix, l_distCoeffs);
-			undistort(right, tmp_r, r_cameraMatrix, r_distCoeffs);
-
-			for (int i=0;i<view.cols;i++) {
-				if (i < left.cols) {
-					 view.col(i) = left.col(i);
-				} else {
-					 view.col(i) = right.col(i - left.cols);
-				}
-			}
+            Mat temp = view.clone();
+            undistort(temp, view, cameraMatrix, distCoeffs);
         }
 
         //------------------------------ Show image and check for input commands -------------------
