@@ -273,24 +273,8 @@ int main(int argc, char* argv[])
         if( s.flipVertical )    flip( view, view, 0 );
 
         vector<Point2f> pointBuf;
-
-        bool found;
-        switch( s.calibrationPattern ) // Find feature points on the input format
-        {
-        case Settings::CHESSBOARD:
-            found = findChessboardCorners( view, s.boardSize, pointBuf,
-                CV_CALIB_CB_ADAPTIVE_THRESH | CV_CALIB_CB_FAST_CHECK | CV_CALIB_CB_NORMALIZE_IMAGE);
-            break;
-        case Settings::CIRCLES_GRID:
-            found = findCirclesGrid( view, s.boardSize, pointBuf );
-            break;
-        case Settings::ASYMMETRIC_CIRCLES_GRID:
-            found = findCirclesGrid( view, s.boardSize, pointBuf, CALIB_CB_ASYMMETRIC_GRID );
-            break;
-        default:
-            found = false;
-            break;
-        }
+        bool found = findChessboardCorners( view, s.boardSize, pointBuf,
+											CV_CALIB_CB_ADAPTIVE_THRESH | CV_CALIB_CB_FAST_CHECK | CV_CALIB_CB_NORMALIZE_IMAGE);
 
         if (found)                // If done with success,
         {
