@@ -229,7 +229,7 @@ int main(int argc, char* argv[])
 	readCameraParams();
 	namedWindow("Image View",1);
     help();
-    Settings s;
+    Settings l_s, r_s;
     const string inputSettingsFile = argc > 1 ? argv[1] : "xml/camera_calibration.xml";
     FileStorage fs(inputSettingsFile, FileStorage::READ); // Read the settings
     if (!fs.isOpened())
@@ -237,10 +237,11 @@ int main(int argc, char* argv[])
         cout << "Could not open the configuration file: \"" << inputSettingsFile << "\"" << endl;
         return -1;
     }
-    fs["Settings"] >> s;
+    fs["Settings"] >> l_s;
+	fs["Settings"] >> r_s;
     fs.release();                                         // close Settings file
 
-    if (!s.goodInput)
+    if (!l_s.goodInput)
     {
         cout << "Invalid input detected. Application stopping. " << endl;
         return -1;
@@ -248,14 +249,13 @@ int main(int argc, char* argv[])
 
 	vector<vector<Point2f> > l_imagePoints;
 	vector<vector<Point2f> > r_imagePoints;
-    vector<vector<Point2f> > imagePoints;
 
     Mat cameraMatrix, distCoeffs;
 	Mat l_cameraMatrix, l_distCoeffs;
 	Mat r_cameraMatrix, r_distCoeffs;
 
     Size imageSize;
-    int mode = s.inputType == Settings::IMAGE_LIST ? CAPTURING : DETECTION;
+    int mode = l_s.inputType == Settings::IMAGE_LIST ? CAPTURING : DETECTION;
     clock_t prevTimestamp = 0;
     const Scalar RED(0,0,255), GREEN(0,255,0);
     const char ESC_KEY = 27;
@@ -267,7 +267,7 @@ int main(int argc, char* argv[])
 		Mat view;
 		bool blinkOutput = false;
 
-		view = s.nextImage();
+		view = l_s.nextImage();
 
 		//-----  If no more image, or got enough, then stop calibration and show result -------------
 		/*if( mode == CAPTURING && imagePoints.size() >= (unsigned)s.nrFrames )
@@ -277,22 +277,24 @@ int main(int argc, char* argv[])
 			else
 				mode = DETECTION;
 		}*/
-		if( mode == CAPTURING && l_imagePoints.size() >= (unsigned)s.nrFrames ){
-			if( runCalibrationAndSave(s, imageSize,  l_cameraMatrix, l_distCoeffs, l_imagePoints) && 
-				runCalibrationAndSave(s, imageSize,  r_cameraMatrix, r_distCoeffs, r_imagePoints))
+		if( mode == CAPTURING && l_imagePoints.size() >= (unsigned)l_s.nrFrames ){
+			if( runCalibrationAndSave(l_s, imageSize,  l_cameraMatrix, l_distCoeffs, l_imagePoints) && 
+				runCalibrationAndSave(r_s, imageSize,  r_cameraMatrix, r_distCoeffs, r_imagePoints))
 				mode = CALIBRATED;
 			else
 				mode = DETECTION;
 		}
 		if(view.empty())          // If no more images then run calibration, save and stop loop.
 		{
-			if( imagePoints.size() > 0 )
-				runCalibrationAndSave(s, imageSize,  cameraMatrix, distCoeffs, imagePoints);
+			if( l_imagePoints.size() > 0 ){
+				runCalibrationAndSave(l_s, imageSize,  l_cameraMatrix, l_distCoeffs, l_imagePoints);
+				runCalibrationAndSave(r_s, imageSize,  r_cameraMatrix, r_distCoeffs, r_imagePoints);
+			}
 			//break;
 			continue;
 		}
 
-        if( s.flipVertical )    flip( view, view, 0 );
+        if( l_s.flipVertical )    flip( view, view, 0 );
 
 		//split left right img from stereo frame
 		split_left_right_frame_stereo_frame(view, left, right, width, height);
@@ -302,9 +304,9 @@ int main(int argc, char* argv[])
 		vector<Point2f> l_pointBuf;
 		vector<Point2f> r_pointBuf;
 
-		bool l_found = findChessboardCorners( left , s.boardSize, l_pointBuf,
+		bool l_found = findChessboardCorners( left , l_s.boardSize, l_pointBuf,
 												CV_CALIB_CB_ADAPTIVE_THRESH | CV_CALIB_CB_FAST_CHECK | CV_CALIB_CB_NORMALIZE_IMAGE);
-		bool r_found = findChessboardCorners( right, s.boardSize, r_pointBuf,
+		bool r_found = findChessboardCorners( right, r_s.boardSize, r_pointBuf,
 												CV_CALIB_CB_ADAPTIVE_THRESH | CV_CALIB_CB_FAST_CHECK | CV_CALIB_CB_NORMALIZE_IMAGE);
 
 		if (l_found && r_found)                // If both found
@@ -325,15 +327,16 @@ int main(int argc, char* argv[])
 			l_imagePoints.push_back(l_pointBuf);
 			r_imagePoints.push_back(r_pointBuf);
 			prevTimestamp = clock();
-			blinkOutput = s.inputCapture.isOpened();
+
+			blinkOutput = l_s.inputCapture.isOpened();
 
 			//draw
 			vector<Point2f> shift_r_pointBuf;
 			for ( Point2f &i : r_pointBuf ) {
 				shift_r_pointBuf.push_back(Point2f(i.x+width, i.y));
 			}
-			drawChessboardCorners( view, s.boardSize, Mat(l_pointBuf), true );
-			drawChessboardCorners( view, s.boardSize, Mat(shift_r_pointBuf), true );
+			drawChessboardCorners( view, l_s.boardSize, Mat(l_pointBuf), true );
+			drawChessboardCorners( view, r_s.boardSize, Mat(shift_r_pointBuf), true );
 		}
 
         //----------------------------- Output Text ------------------------------------------------
@@ -345,10 +348,10 @@ int main(int argc, char* argv[])
 
         if( mode == CAPTURING )
         {
-            if(s.showUndistorsed)
-                msg = format( "%d/%d Undist", (int)imagePoints.size(), s.nrFrames );
+            if(l_s.showUndistorsed)
+                msg = format( "%d/%d Undist", (int)l_imagePoints.size(), l_s.nrFrames );
             else
-                msg = format( "%d/%d", (int)imagePoints.size(), s.nrFrames );
+                msg = format( "%d/%d", (int)l_imagePoints.size(), l_s.nrFrames );
         }
 
         putText( view, msg, textOrigin, 1, 1, mode == CALIBRATED ?  GREEN : RED);
@@ -357,13 +360,13 @@ int main(int argc, char* argv[])
             bitwise_not(view, view);
 
         //------------------------- Video capture  output  undistorted ------------------------------
-        if( mode == CALIBRATED && s.showUndistorsed )
+        if( mode == CALIBRATED && l_s.showUndistorsed )
         {
             Mat tmp_l = left.clone();
 			Mat tmp_r = right.clone();
             
-			undistort(left , tmp_l, l_cameraMatrix, l_distCoeffs);
-			undistort(right, tmp_r, r_cameraMatrix, r_distCoeffs);
+			undistort(tmp_l , left, l_cameraMatrix, l_distCoeffs);
+			undistort(tmp_r, right, r_cameraMatrix, r_distCoeffs);
 
 			for (int i=0;i<view.cols;i++) {
 				if (i < left.cols) {
@@ -372,29 +375,34 @@ int main(int argc, char* argv[])
 					 view.col(i) = right.col(i - left.cols);
 				}
 			}
+			/*for(int x=0 ; x<width*2*3 ; x++)for(int y=0 ; y<height ; y++){
+				view.at<uchar>(y, x) = 0;
+			}*/
         }
 
         //------------------------------ Show image and check for input commands -------------------
         imshow("Image View", view);
-        char key = (char)waitKey(s.inputCapture.isOpened() ? 50 : s.delay);
+        char key = (char)waitKey(l_s.inputCapture.isOpened() ? 50 : l_s.delay);
 
         if( key  == ESC_KEY )
             break;
 
-        if( key == 'u' && mode == CALIBRATED )
-           s.showUndistorsed = !s.showUndistorsed;
-
-        if( s.inputCapture.isOpened() && key == 'g' )
+        if( key == 'u' && mode == CALIBRATED ){
+           l_s.showUndistorsed = !l_s.showUndistorsed;
+		   r_s.showUndistorsed = !r_s.showUndistorsed;
+		}
+        if( l_s.inputCapture.isOpened() && key == 'g' )
         {
             mode = CAPTURING;
-            imagePoints.clear();
+            l_imagePoints.clear();
+			r_imagePoints.clear();
         }
     }
 
 	printf("Jump out of capturing loop already!\n");
 
     // -----------------------Show the undistorted image for the image list ------------------------
-    if( s.inputType == Settings::IMAGE_LIST && s.showUndistorsed )
+    /*if( s.inputType == Settings::IMAGE_LIST && s.showUndistorsed )
     {
         Mat view, rview, map1, map2;
         initUndistortRectifyMap(cameraMatrix, distCoeffs, Mat(),
@@ -412,7 +420,7 @@ int main(int argc, char* argv[])
             if( c  == ESC_KEY || c == 'q' || c == 'Q' )
                 break;
         }
-    }
+    }*/
 
     return 0;
 }
