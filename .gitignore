@@ -1,0 +1,5 @@
+Debug/*
+Release/*
+*.png
+*.xml
+*.yml
