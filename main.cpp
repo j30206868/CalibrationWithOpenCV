@@ -8,6 +8,8 @@
 #include <opencv2/calib3d/calib3d.hpp>
 #include <opencv2/highgui/highgui.hpp>
 
+#include "Source.cpp"
+
 #ifndef _CRT_SECURE_NO_WARNINGS
 # define _CRT_SECURE_NO_WARNINGS
 #endif
@@ -221,8 +223,20 @@ void split_left_right_frame_stereo_frame(cv::Mat stereo_frame, cv::Mat &left, cv
 	right = stereo_frame(Rect(w, 0, w, h));
 }
 
+void copy_left_right_into_view(cv::Mat left, cv::Mat right, cv::Mat &view){
+	for (int i=0;i<view.cols;i++) {
+		if (i < left.cols) {
+				view.col(i) = left.col(i);
+		} else {
+				view.col(i) = right.col(i - left.cols);
+		}
+	}
+}
+
 int main(int argc, char* argv[])
 {
+	StereoCalib("list.txt", 13, 9, 1);
+
 	int width  = 640;
 	int height = 400;
 
@@ -230,16 +244,23 @@ int main(int argc, char* argv[])
 	namedWindow("Image View",1);
     help();
     Settings l_s, r_s;
-    const string inputSettingsFile = argc > 1 ? argv[1] : "xml/camera_calibration.xml";
-    FileStorage fs(inputSettingsFile, FileStorage::READ); // Read the settings
-    if (!fs.isOpened())
+    //const string inputSettingsFile = argc > 1 ? argv[1] : "xml/camera_calibration.xml";
+    FileStorage l_fs("xml/left_calibrate.xml", FileStorage::READ); // Read the settings
+	FileStorage r_fs("xml/right_calibrate.xml", FileStorage::READ); // Read the settings
+    if (!l_fs.isOpened())
     {
-        cout << "Could not open the configuration file: \"" << inputSettingsFile << "\"" << endl;
+        cout << "Could not open the configuration file: \" left_calibrate.xml can't be found! \"" << endl;
         return -1;
     }
-    fs["Settings"] >> l_s;
-	fs["Settings"] >> r_s;
-    fs.release();                                         // close Settings file
+	if (!r_fs.isOpened())
+    {
+        cout << "Could not open the configuration file: \" right_calibrate.xml can't be found! \"" << endl;
+        return -1;
+    }
+    l_fs["Settings"] >> l_s;
+	r_fs["Settings"] >> r_s;
+    l_fs.release();                                         // close Settings file
+	r_fs.release();
 
     if (!l_s.goodInput)
     {
@@ -290,8 +311,8 @@ int main(int argc, char* argv[])
 				runCalibrationAndSave(l_s, imageSize,  l_cameraMatrix, l_distCoeffs, l_imagePoints);
 				runCalibrationAndSave(r_s, imageSize,  r_cameraMatrix, r_distCoeffs, r_imagePoints);
 			}
-			//break;
-			continue;
+			break;
+			//continue;
 		}
 
         if( l_s.flipVertical )    flip( view, view, 0 );
@@ -368,13 +389,7 @@ int main(int argc, char* argv[])
 			undistort(tmp_l , left, l_cameraMatrix, l_distCoeffs);
 			undistort(tmp_r, right, r_cameraMatrix, r_distCoeffs);
 
-			for (int i=0;i<view.cols;i++) {
-				if (i < left.cols) {
-					 view.col(i) = left.col(i);
-				} else {
-					 view.col(i) = right.col(i - left.cols);
-				}
-			}
+			copy_left_right_into_view(left, right, view);
 			/*for(int x=0 ; x<width*2*3 ; x++)for(int y=0 ; y<height ; y++){
 				view.at<uchar>(y, x) = 0;
 			}*/
@@ -402,19 +417,30 @@ int main(int argc, char* argv[])
 	printf("Jump out of capturing loop already!\n");
 
     // -----------------------Show the undistorted image for the image list ------------------------
-    /*if( s.inputType == Settings::IMAGE_LIST && s.showUndistorsed )
+    /*if( l_s.inputType == Settings::IMAGE_LIST && l_s.showUndistorsed )
     {
-        Mat view, rview, map1, map2;
-        initUndistortRectifyMap(cameraMatrix, distCoeffs, Mat(),
-            getOptimalNewCameraMatrix(cameraMatrix, distCoeffs, imageSize, 1, imageSize, 0),
-            imageSize, CV_16SC2, map1, map2);
+        Mat view, rview, rleft, rright, l_map1, l_map2, r_map1, r_map2;
+        initUndistortRectifyMap(l_cameraMatrix, l_distCoeffs, Mat(),
+            getOptimalNewCameraMatrix(l_cameraMatrix, l_distCoeffs, imageSize, 1, imageSize, 0),
+            imageSize, CV_16SC2, l_map1, l_map2);
+		initUndistortRectifyMap(r_cameraMatrix, r_distCoeffs, Mat(),
+            getOptimalNewCameraMatrix(r_cameraMatrix, r_distCoeffs, imageSize, 1, imageSize, 0),
+            imageSize, CV_16SC2, r_map1, r_map2);
 
-        for(int i = 0; i < (int)s.imageList.size(); i++ )
+        for(int i = 0; i < (int)l_s.imageList.size(); i++ )
         {
-            view = imread(s.imageList[i], 1);
+			view = imread(l_s.imageList[i], CV_LOAD_IMAGE_COLOR);
+			system("PAUSE");
             if(view.empty())
                 continue;
-            remap(view, rview, map1, map2, INTER_LINEAR);
+            
+			split_left_right_frame_stereo_frame(view, left, right, width, height);
+			
+			remap(left, rleft, l_map1, l_map2, INTER_LINEAR);
+			remap(right, rright, r_map1, r_map2, INTER_LINEAR);
+
+			copy_left_right_into_view(left, right, rview);
+
             imshow("Image View", rview);
             char c = (char)waitKey(0);
             if( c  == ESC_KEY || c == 'q' || c == 'Q' )
