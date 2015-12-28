@@ -3,6 +3,11 @@ Release/*
 xml/*
 xmls/*
 calibration/*
+calib_img/*
+main.o
+main.exe
+makefile
+test/*
 *.png
 *.xml
 *.yml

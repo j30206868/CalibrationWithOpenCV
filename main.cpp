@@ -1,666 +1,409 @@
+/* This is sample from the OpenCV book. The copyright notice is below */
+
+/* *************** License:**************************
+   Oct. 3, 2008
+   Right to use this code in any way you want without warranty, support or any guarantee of it working.
+
+   BOOK: It would be nice if you cited it:
+   Learning OpenCV: Computer Vision with the OpenCV Library
+     by Gary Bradski and Adrian Kaehler
+     Published by O'Reilly Media, October 3, 2008
+
+   AVAILABLE AT:
+     http://www.amazon.com/Learning-OpenCV-Computer-Vision-Library/dp/0596516134
+     Or: http://oreilly.com/catalog/9780596516130/
+     ISBN-10: 0596516134 or: ISBN-13: 978-0596516130
+
+   OPENCV WEBSITES:
+     Homepage:      http://opencv.org
+     Online docs:   http://docs.opencv.org
+     Q&A forum:     http://answers.opencv.org
+     Issue tracker: http://code.opencv.org
+     GitHub:        https://github.com/Itseez/opencv/
+   ************************************************** */
+
+#include "opencv2/calib3d/calib3d.hpp"
+#include "opencv2/highgui/highgui.hpp"
+#include "opencv2/imgproc/imgproc.hpp"
+
+#include <vector>
+#include <string>
+#include <algorithm>
 #include <iostream>
-#include <sstream>
-#include <time.h>
+#include <iterator>
 #include <stdio.h>
-
-#include <opencv2/core/core.hpp>
-#include <opencv2/imgproc/imgproc.hpp>
-#include <opencv2/calib3d/calib3d.hpp>
-#include <opencv2/highgui/highgui.hpp>
-
-#include "Source.cpp"
-
-#ifndef _CRT_SECURE_NO_WARNINGS
-# define _CRT_SECURE_NO_WARNINGS
-#endif
+#include <stdlib.h>
+#include <ctype.h>
 
 using namespace cv;
 using namespace std;
 
-static void help()
+static int print_help()
 {
-    cout <<  "This is a camera calibration sample." << endl
-         <<  "Usage: calibration configurationFile"  << endl
-         <<  "Near the sample file you'll find the configuration file, which has detailed help of "
-             "how to edit it.  It may be any OpenCV supported file format XML/YAML." << endl;
-}
-class Settings
-{
-public:
-    Settings() : goodInput(false) {}
-    enum Pattern { NOT_EXISTING, CHESSBOARD, CIRCLES_GRID, ASYMMETRIC_CIRCLES_GRID };
-    enum InputType {INVALID, CAMERA, VIDEO_FILE, IMAGE_LIST};
-
-    void write(FileStorage& fs) const                        //Write serialization for this class
-    {
-        fs << "{" << "BoardSize_Width"  << boardSize.width
-                  << "BoardSize_Height" << boardSize.height
-                  << "Square_Size"         << squareSize
-                  << "Calibrate_Pattern" << patternToUse
-                  << "Calibrate_NrOfFrameToUse" << nrFrames
-                  << "Calibrate_FixAspectRatio" << aspectRatio
-                  << "Calibrate_AssumeZeroTangentialDistortion" << calibZeroTangentDist
-                  << "Calibrate_FixPrincipalPointAtTheCenter" << calibFixPrincipalPoint
-
-                  << "Write_DetectedFeaturePoints" << bwritePoints
-                  << "Write_extrinsicParameters"   << bwriteExtrinsics
-                  << "Write_outputFileName"  << outputFileName
-
-                  << "Show_UndistortedImage" << showUndistorsed
-
-                  << "Input_FlipAroundHorizontalAxis" << flipVertical
-                  << "Input_Delay" << delay
-                  << "Input" << input
-           << "}";
-    }
-    void read(const FileNode& node)                          //Read serialization for this class
-    {
-        node["BoardSize_Width" ] >> boardSize.width;
-        node["BoardSize_Height"] >> boardSize.height;
-        node["Calibrate_Pattern"] >> patternToUse;
-        node["Square_Size"]  >> squareSize;
-        node["Calibrate_NrOfFrameToUse"] >> nrFrames;
-        node["Calibrate_FixAspectRatio"] >> aspectRatio;
-        node["Write_DetectedFeaturePoints"] >> bwritePoints;
-        node["Write_extrinsicParameters"] >> bwriteExtrinsics;
-        node["Write_outputFileName"] >> outputFileName;
-        node["Calibrate_AssumeZeroTangentialDistortion"] >> calibZeroTangentDist;
-        node["Calibrate_FixPrincipalPointAtTheCenter"] >> calibFixPrincipalPoint;
-        node["Input_FlipAroundHorizontalAxis"] >> flipVertical;
-        node["Show_UndistortedImage"] >> showUndistorsed;
-        node["Input"] >> input;
-        node["Input_Delay"] >> delay;
-        interprate();
-    }
-    void interprate()
-    {
-        goodInput = true;
-        if (boardSize.width <= 0 || boardSize.height <= 0)
-        {
-            cerr << "Invalid Board size: " << boardSize.width << " " << boardSize.height << endl;
-            goodInput = false;
-        }
-        if (squareSize <= 10e-6)
-        {
-            cerr << "Invalid square size " << squareSize << endl;
-            goodInput = false;
-        }
-        if (nrFrames <= 0)
-        {
-            cerr << "Invalid number of frames " << nrFrames << endl;
-            goodInput = false;
-        }
-
-        if (input.empty())      // Check for valid input
-                inputType = INVALID;
-        else
-        {
-            if (input[0] >= '0' && input[0] <= '9')
-            {
-                stringstream ss(input);
-                ss >> cameraID;
-                inputType = CAMERA;
-            }
-            else
-            {
-                if (readStringList(input, imageList))
-                    {
-                        inputType = IMAGE_LIST;
-                        nrFrames = (nrFrames < (int)imageList.size()) ? nrFrames : (int)imageList.size();
-                    }
-                else
-                    inputType = VIDEO_FILE;
-            }
-            if (inputType == CAMERA)
-                inputCapture.open(cameraID);
-            if (inputType == VIDEO_FILE)
-                inputCapture.open(input);
-            if (inputType != IMAGE_LIST && !inputCapture.isOpened())
-                    inputType = INVALID;
-        }
-        if (inputType == INVALID)
-        {
-            cerr << " Inexistent input: " << input;
-            goodInput = false;
-        }
-
-        flag = 0;
-        if(calibFixPrincipalPoint) flag |= CV_CALIB_FIX_PRINCIPAL_POINT;
-        if(calibZeroTangentDist)   flag |= CV_CALIB_ZERO_TANGENT_DIST;
-        if(aspectRatio)            flag |= CV_CALIB_FIX_ASPECT_RATIO;
-
-
-        calibrationPattern = NOT_EXISTING;
-        if (!patternToUse.compare("CHESSBOARD")) calibrationPattern = CHESSBOARD;
-        if (!patternToUse.compare("CIRCLES_GRID")) calibrationPattern = CIRCLES_GRID;
-        if (!patternToUse.compare("ASYMMETRIC_CIRCLES_GRID")) calibrationPattern = ASYMMETRIC_CIRCLES_GRID;
-        if (calibrationPattern == NOT_EXISTING)
-            {
-                cerr << " Inexistent camera calibration mode: " << patternToUse << endl;
-                goodInput = false;
-            }
-        atImageList = 0;
-
-    }
-    Mat nextImage()
-    {
-        Mat result;
-        if( inputCapture.isOpened() )
-        {
-            Mat view0;
-            inputCapture >> view0;
-            view0.copyTo(result);
-        }
-        else if( atImageList < (int)imageList.size() )
-            result = imread(imageList[atImageList++], CV_LOAD_IMAGE_COLOR);
-
-        return result;
-    }
-
-    static bool readStringList( const string& filename, vector<string>& l )
-    {
-        l.clear();
-        FileStorage fs(filename, FileStorage::READ);
-        if( !fs.isOpened() )
-            return false;
-        FileNode n = fs.getFirstTopLevelNode();
-        if( n.type() != FileNode::SEQ )
-            return false;
-        FileNodeIterator it = n.begin(), it_end = n.end();
-        for( ; it != it_end; ++it )
-            l.push_back((string)*it);
-        return true;
-    }
-public:
-    Size boardSize;            // The size of the board -> Number of items by width and height
-    Pattern calibrationPattern;// One of the Chessboard, circles, or asymmetric circle pattern
-    float squareSize;          // The size of a square in your defined unit (point, millimeter,etc).
-    int nrFrames;              // The number of frames to use from the input for calibration
-    float aspectRatio;         // The aspect ratio
-    int delay;                 // In case of a video input
-    bool bwritePoints;         //  Write detected feature points
-    bool bwriteExtrinsics;     // Write extrinsic parameters
-    bool calibZeroTangentDist; // Assume zero tangential distortion
-    bool calibFixPrincipalPoint;// Fix the principal point at the center
-    bool flipVertical;          // Flip the captured images around the horizontal axis
-    string outputFileName;      // The name of the file where to write
-    bool showUndistorsed;       // Show undistorted images after calibration
-    string input;               // The input ->
-
-
-
-    int cameraID;
-    vector<string> imageList;
-    int atImageList;
-    VideoCapture inputCapture;
-    InputType inputType;
-    bool goodInput;
-    int flag;
-
-private:
-    string patternToUse;
-
-
-};
-
-static void read(const FileNode& node, Settings& x, const Settings& default_value = Settings())
-{
-    if(node.empty())
-        x = default_value;
-    else
-        x.read(node);
-}
-
-enum { DETECTION = 0, CAPTURING = 1, CALIBRATED = 2 };
-
-bool runCalibrationAndSave(Settings& s, Size imageSize, Mat&  cameraMatrix, Mat& distCoeffs,
-                           vector<vector<Point2f> > imagePoints );
-
-static void readCameraParams();
-
-void split_left_right_frame_stereo_frame(cv::Mat stereo_frame, cv::Mat &left, cv::Mat &right, int w, int h){
-	left = stereo_frame(Rect(0, 0, w, h));
-	right = stereo_frame(Rect(w, 0, w, h));
-}
-
-void copy_left_right_into_view(cv::Mat left, cv::Mat right, cv::Mat &view){
-	for (int i=0;i<view.cols;i++) {
-		if (i < left.cols) {
-				view.col(i) = left.col(i);
-		} else {
-				view.col(i) = right.col(i - left.cols);
-		}
-	}
-}
-
-int main(int argc, char* argv[])
-{
-	StereoCalib("list.txt", 13, 9, 1);
-
-	int width  = 640;
-	int height = 400;
-
-	readCameraParams();
-	namedWindow("Image View",1);
-    help();
-    Settings l_s, r_s;
-    //const string inputSettingsFile = argc > 1 ? argv[1] : "xml/camera_calibration.xml";
-    FileStorage l_fs("xml/left_calibrate.xml", FileStorage::READ); // Read the settings
-	FileStorage r_fs("xml/right_calibrate.xml", FileStorage::READ); // Read the settings
-    if (!l_fs.isOpened())
-    {
-        cout << "Could not open the configuration file: \" left_calibrate.xml can't be found! \"" << endl;
-        return -1;
-    }
-	if (!r_fs.isOpened())
-    {
-        cout << "Could not open the configuration file: \" right_calibrate.xml can't be found! \"" << endl;
-        return -1;
-    }
-    l_fs["Settings"] >> l_s;
-	r_fs["Settings"] >> r_s;
-    l_fs.release();                                         // close Settings file
-	r_fs.release();
-
-    if (!l_s.goodInput)
-    {
-        cout << "Invalid input detected. Application stopping. " << endl;
-        return -1;
-    }
-
-	vector<vector<Point2f> > l_imagePoints;
-	vector<vector<Point2f> > r_imagePoints;
-
-    Mat cameraMatrix, distCoeffs;
-	Mat l_cameraMatrix, l_distCoeffs;
-	Mat r_cameraMatrix, r_distCoeffs;
-
-    Size imageSize;
-    int mode = l_s.inputType == Settings::IMAGE_LIST ? CAPTURING : DETECTION;
-    clock_t prevTimestamp = 0;
-    const Scalar RED(0,0,255), GREEN(0,255,0);
-    const char ESC_KEY = 27;
-
-	cv::Mat left, right;
-
-    for(int i = 0;;++i)
-    {
-		Mat view;
-		bool blinkOutput = false;
-
-		view = l_s.nextImage();
-
-		//-----  If no more image, or got enough, then stop calibration and show result -------------
-		/*if( mode == CAPTURING && imagePoints.size() >= (unsigned)s.nrFrames )
-		{
-			if( runCalibrationAndSave(s, imageSize,  cameraMatrix, distCoeffs, imagePoints))
-				mode = CALIBRATED;
-			else
-				mode = DETECTION;
-		}*/
-		if( mode == CAPTURING && l_imagePoints.size() >= (unsigned)l_s.nrFrames ){
-			if( runCalibrationAndSave(l_s, imageSize,  l_cameraMatrix, l_distCoeffs, l_imagePoints) && 
-				runCalibrationAndSave(r_s, imageSize,  r_cameraMatrix, r_distCoeffs, r_imagePoints))
-				mode = CALIBRATED;
-			else
-				mode = DETECTION;
-		}
-		if(view.empty())          // If no more images then run calibration, save and stop loop.
-		{
-			if( l_imagePoints.size() > 0 ){
-				runCalibrationAndSave(l_s, imageSize,  l_cameraMatrix, l_distCoeffs, l_imagePoints);
-				runCalibrationAndSave(r_s, imageSize,  r_cameraMatrix, r_distCoeffs, r_imagePoints);
-			}
-			break;
-			//continue;
-		}
-
-        if( l_s.flipVertical )    flip( view, view, 0 );
-
-		//split left right img from stereo frame
-		split_left_right_frame_stereo_frame(view, left, right, width, height);
-
-		imageSize = left.size();  // Format input image.
-
-		vector<Point2f> l_pointBuf;
-		vector<Point2f> r_pointBuf;
-
-		bool l_found = findChessboardCorners( left , l_s.boardSize, l_pointBuf,
-												CV_CALIB_CB_ADAPTIVE_THRESH | CV_CALIB_CB_FAST_CHECK | CV_CALIB_CB_NORMALIZE_IMAGE);
-		bool r_found = findChessboardCorners( right, r_s.boardSize, r_pointBuf,
-												CV_CALIB_CB_ADAPTIVE_THRESH | CV_CALIB_CB_FAST_CHECK | CV_CALIB_CB_NORMALIZE_IMAGE);
-
-		if (l_found && r_found)                // If both found
-		{
-			// improve the found corners' coordinate accuracy for chessboard
-			Mat l_viewGray;
-			Mat r_viewGray;
-
-			cvtColor(left , l_viewGray, COLOR_BGR2GRAY);
-			cvtColor(right, r_viewGray, COLOR_BGR2GRAY);
-
-			cornerSubPix( l_viewGray, l_pointBuf, Size(11,11),
-				Size(-1,-1), TermCriteria( CV_TERMCRIT_EPS+CV_TERMCRIT_ITER, 30, 0.1 ));
-			cornerSubPix( r_viewGray, r_pointBuf, Size(11,11),
-				Size(-1,-1), TermCriteria( CV_TERMCRIT_EPS+CV_TERMCRIT_ITER, 30, 0.1 ));
-
-			// For camera only take new samples after delay time
-			l_imagePoints.push_back(l_pointBuf);
-			r_imagePoints.push_back(r_pointBuf);
-			prevTimestamp = clock();
-
-			blinkOutput = l_s.inputCapture.isOpened();
-
-			//draw
-			vector<Point2f> shift_r_pointBuf;
-			for ( Point2f &i : r_pointBuf ) {
-				shift_r_pointBuf.push_back(Point2f(i.x+width, i.y));
-			}
-			drawChessboardCorners( view, l_s.boardSize, Mat(l_pointBuf), true );
-			drawChessboardCorners( view, r_s.boardSize, Mat(shift_r_pointBuf), true );
-		}
-
-        //----------------------------- Output Text ------------------------------------------------
-        string msg = (mode == CAPTURING) ? "100/100" :
-                      mode == CALIBRATED ? "Calibrated" : "Press 'g' to start";
-        int baseLine = 0;
-        Size textSize = getTextSize(msg, 1, 1, 1, &baseLine);
-        Point textOrigin(view.cols - 2*textSize.width - 10, view.rows - 2*baseLine - 10);
-
-        if( mode == CAPTURING )
-        {
-            if(l_s.showUndistorsed)
-                msg = format( "%d/%d Undist", (int)l_imagePoints.size(), l_s.nrFrames );
-            else
-                msg = format( "%d/%d", (int)l_imagePoints.size(), l_s.nrFrames );
-        }
-
-        putText( view, msg, textOrigin, 1, 1, mode == CALIBRATED ?  GREEN : RED);
-
-        if( blinkOutput )
-            bitwise_not(view, view);
-
-        //------------------------- Video capture  output  undistorted ------------------------------
-        if( mode == CALIBRATED && l_s.showUndistorsed )
-        {
-            Mat tmp_l = left.clone();
-			Mat tmp_r = right.clone();
-            
-			undistort(tmp_l , left, l_cameraMatrix, l_distCoeffs);
-			undistort(tmp_r, right, r_cameraMatrix, r_distCoeffs);
-
-			copy_left_right_into_view(left, right, view);
-			/*for(int x=0 ; x<width*2*3 ; x++)for(int y=0 ; y<height ; y++){
-				view.at<uchar>(y, x) = 0;
-			}*/
-        }
-
-        //------------------------------ Show image and check for input commands -------------------
-        imshow("Image View", view);
-        char key = (char)waitKey(l_s.inputCapture.isOpened() ? 50 : l_s.delay);
-
-        if( key  == ESC_KEY )
-            break;
-
-        if( key == 'u' && mode == CALIBRATED ){
-           l_s.showUndistorsed = !l_s.showUndistorsed;
-		   r_s.showUndistorsed = !r_s.showUndistorsed;
-		}
-        if( l_s.inputCapture.isOpened() && key == 'g' )
-        {
-            mode = CAPTURING;
-            l_imagePoints.clear();
-			r_imagePoints.clear();
-        }
-    }
-
-	printf("Jump out of capturing loop already!\n");
-
-    // -----------------------Show the undistorted image for the image list ------------------------
-    /*if( l_s.inputType == Settings::IMAGE_LIST && l_s.showUndistorsed )
-    {
-        Mat view, rview, rleft, rright, l_map1, l_map2, r_map1, r_map2;
-        initUndistortRectifyMap(l_cameraMatrix, l_distCoeffs, Mat(),
-            getOptimalNewCameraMatrix(l_cameraMatrix, l_distCoeffs, imageSize, 1, imageSize, 0),
-            imageSize, CV_16SC2, l_map1, l_map2);
-		initUndistortRectifyMap(r_cameraMatrix, r_distCoeffs, Mat(),
-            getOptimalNewCameraMatrix(r_cameraMatrix, r_distCoeffs, imageSize, 1, imageSize, 0),
-            imageSize, CV_16SC2, r_map1, r_map2);
-
-        for(int i = 0; i < (int)l_s.imageList.size(); i++ )
-        {
-			view = imread(l_s.imageList[i], CV_LOAD_IMAGE_COLOR);
-			system("PAUSE");
-            if(view.empty())
-                continue;
-            
-			split_left_right_frame_stereo_frame(view, left, right, width, height);
-			
-			remap(left, rleft, l_map1, l_map2, INTER_LINEAR);
-			remap(right, rright, r_map1, r_map2, INTER_LINEAR);
-
-			copy_left_right_into_view(left, right, rview);
-
-            imshow("Image View", rview);
-            char c = (char)waitKey(0);
-            if( c  == ESC_KEY || c == 'q' || c == 'Q' )
-                break;
-        }
-    }*/
-
+    cout <<
+            " Given a list of chessboard images, the number of corners (nx, ny)\n"
+            " on the chessboards, and a flag: useCalibrated for \n"
+            "   calibrated (0) or\n"
+            "   uncalibrated \n"
+            "     (1: use cvStereoCalibrate(), 2: compute fundamental\n"
+            "         matrix separately) stereo. \n"
+            " Calibrate the cameras and display the\n"
+            " rectified results along with the computed disparity images.   \n" << endl;
+    cout << "Usage:\n ./stereo_calib -w board_width -h board_height [-nr /*dot not view results*/] <image list XML/YML file>\n" << endl;
     return 0;
 }
 
-static double computeReprojectionErrors( const vector<vector<Point3f> >& objectPoints,
-                                         const vector<vector<Point2f> >& imagePoints,
-                                         const vector<Mat>& rvecs, const vector<Mat>& tvecs,
-                                         const Mat& cameraMatrix , const Mat& distCoeffs,
-                                         vector<float>& perViewErrors)
+
+static void
+StereoCalib(const vector<string>& imagelist, Size boardSize, bool useCalibrated=true, bool showRectified=true)
 {
-    vector<Point2f> imagePoints2;
-    int i, totalPoints = 0;
-    double totalErr = 0, err;
-    perViewErrors.resize(objectPoints.size());
-
-    for( i = 0; i < (int)objectPoints.size(); ++i )
+    if( imagelist.size() % 2 != 0 )
     {
-        projectPoints( Mat(objectPoints[i]), rvecs[i], tvecs[i], cameraMatrix,
-                       distCoeffs, imagePoints2);
-        err = norm(Mat(imagePoints[i]), Mat(imagePoints2), CV_L2);
-
-        int n = (int)objectPoints[i].size();
-        perViewErrors[i] = (float) std::sqrt(err*err/n);
-        totalErr        += err*err;
-        totalPoints     += n;
+        cout << "Error: the image list contains odd (non-even) number of elements\n";
+        return;
     }
 
-    return std::sqrt(totalErr/totalPoints);
-}
+    bool displayCorners = false;//true;
+    const int maxScale = 2;
+    const float squareSize = 1.f;  // Set this to your actual square size
+    // ARRAY AND VECTOR STORAGE:
 
-static void calcBoardCornerPositions(Size boardSize, float squareSize, vector<Point3f>& corners,
-                                     Settings::Pattern patternType /*= Settings::CHESSBOARD*/)
-{
-    corners.clear();
+    vector<vector<Point2f> > imagePoints[2];
+    vector<vector<Point3f> > objectPoints;
+    Size imageSize;
 
-    switch(patternType)
+    int i, j, k, nimages = (int)imagelist.size()/2;
+
+    imagePoints[0].resize(nimages);
+    imagePoints[1].resize(nimages);
+    vector<string> goodImageList;
+
+    for( i = j = 0; i < nimages; i++ )
     {
-    case Settings::CHESSBOARD:
-    case Settings::CIRCLES_GRID:
-        for( int i = 0; i < boardSize.height; ++i )
-            for( int j = 0; j < boardSize.width; ++j )
-                corners.push_back(Point3f(float( j*squareSize ), float( i*squareSize ), 0));
-        break;
-
-    case Settings::ASYMMETRIC_CIRCLES_GRID:
-        for( int i = 0; i < boardSize.height; i++ )
-            for( int j = 0; j < boardSize.width; j++ )
-                corners.push_back(Point3f(float((2*j + i % 2)*squareSize), float(i*squareSize), 0));
-        break;
-    default:
-        break;
-    }
-}
-
-static bool runCalibration( Settings& s, Size& imageSize, Mat& cameraMatrix, Mat& distCoeffs,
-                            vector<vector<Point2f> > imagePoints, vector<Mat>& rvecs, vector<Mat>& tvecs,
-                            vector<float>& reprojErrs,  double& totalAvgErr)
-{
-
-    cameraMatrix = Mat::eye(3, 3, CV_64F);
-    if( s.flag & CV_CALIB_FIX_ASPECT_RATIO )
-        cameraMatrix.at<double>(0,0) = 1.0;
-
-    distCoeffs = Mat::zeros(8, 1, CV_64F);
-
-    vector<vector<Point3f> > objectPoints(1);
-    calcBoardCornerPositions(s.boardSize, s.squareSize, objectPoints[0], s.calibrationPattern);
-
-    objectPoints.resize(imagePoints.size(),objectPoints[0]);
-
-    //Find intrinsic and extrinsic camera parameters
-    double rms = calibrateCamera(objectPoints, imagePoints, imageSize, cameraMatrix,
-                                 distCoeffs, rvecs, tvecs, s.flag|CV_CALIB_FIX_K4|CV_CALIB_FIX_K5);
-
-    cout << "Re-projection error reported by calibrateCamera: "<< rms << endl;
-
-    bool ok = checkRange(cameraMatrix) && checkRange(distCoeffs);
-
-    totalAvgErr = computeReprojectionErrors(objectPoints, imagePoints,
-                                             rvecs, tvecs, cameraMatrix, distCoeffs, reprojErrs);
-
-    return ok;
-}
-
-static void  readCameraParams(){
-	FileStorage fs2("VAIO_CAMERA.yml", FileStorage::READ);
-
-	// first method: use (type) operator on FileNode.
-	int frameCount = (int)fs2["nrOfFrames"];
-
-	std::string date;
-	// second method: use FileNode::operator >>
-	fs2["calibration_Time"] >> date;
-
-	Mat cameraMatrix2, distCoeffs2;
-	fs2["Camera_Matrix"] >> cameraMatrix2;
-	fs2["Distortion_Coefficients"] >> distCoeffs2;
-
-	cout << "nrOfFrames: " << frameCount << endl
-		 << "calibration_Time: " << date << endl
-		 << "Camera_Matrix: " << cameraMatrix2 << endl
-		 << "Distortion_Coefficients: " << distCoeffs2 << endl;
-
-	FileNode features = fs2["features"];
-	FileNodeIterator it = features.begin(), it_end = features.end();
-	int idx = 0;
-	std::vector<uchar> lbpval;
-
-	// iterate through a sequence using FileNodeIterator
-	for( ; it != it_end; ++it, idx++ )
-	{
-		cout << "feature #" << idx << ": ";
-		cout << "x=" << (int)(*it)["x"] << ", y=" << (int)(*it)["y"] << ", lbp: (";
-		// you can also easily read numerical arrays using FileNode >> std::vector operator.
-		(*it)["lbp"] >> lbpval;
-		for( int i = 0; i < (int)lbpval.size(); i++ )
-			cout << " " << (int)lbpval[i];
-		cout << ")" << endl;
-	}
-	fs2.release();
-}
-
-// Print camera parameters to the output file
-static void saveCameraParams( Settings& s, Size& imageSize, Mat& cameraMatrix, Mat& distCoeffs,
-                              const vector<Mat>& rvecs, const vector<Mat>& tvecs,
-                              const vector<float>& reprojErrs, const vector<vector<Point2f> >& imagePoints,
-                              double totalAvgErr )
-{
-    FileStorage fs( s.outputFileName, FileStorage::WRITE );
-
-    time_t tm;
-    time( &tm );
-    struct tm *t2 = localtime( &tm );
-    char buf[1024];
-    strftime( buf, sizeof(buf)-1, "%c", t2 );
-
-    fs << "calibration_Time" << buf;
-
-    if( !rvecs.empty() || !reprojErrs.empty() )
-        fs << "nrOfFrames" << (int)std::max(rvecs.size(), reprojErrs.size());
-    fs << "image_Width" << imageSize.width;
-    fs << "image_Height" << imageSize.height;
-    fs << "board_Width" << s.boardSize.width;
-    fs << "board_Height" << s.boardSize.height;
-    fs << "square_Size" << s.squareSize;
-
-    if( s.flag & CV_CALIB_FIX_ASPECT_RATIO )
-        fs << "FixAspectRatio" << s.aspectRatio;
-
-    if( s.flag )
-    {
-        sprintf( buf, "flags: %s%s%s%s",
-            s.flag & CV_CALIB_USE_INTRINSIC_GUESS ? " +use_intrinsic_guess" : "",
-            s.flag & CV_CALIB_FIX_ASPECT_RATIO ? " +fix_aspectRatio" : "",
-            s.flag & CV_CALIB_FIX_PRINCIPAL_POINT ? " +fix_principal_point" : "",
-            s.flag & CV_CALIB_ZERO_TANGENT_DIST ? " +zero_tangent_dist" : "" );
-        cvWriteComment( *fs, buf, 0 );
-
-    }
-
-    fs << "flagValue" << s.flag;
-
-    fs << "Camera_Matrix" << cameraMatrix;
-    fs << "Distortion_Coefficients" << distCoeffs;
-
-    fs << "Avg_Reprojection_Error" << totalAvgErr;
-    if( !reprojErrs.empty() )
-        fs << "Per_View_Reprojection_Errors" << Mat(reprojErrs);
-
-    if( !rvecs.empty() && !tvecs.empty() )
-    {
-        CV_Assert(rvecs[0].type() == tvecs[0].type());
-        Mat bigmat((int)rvecs.size(), 6, rvecs[0].type());
-        for( int i = 0; i < (int)rvecs.size(); i++ )
+        for( k = 0; k < 2; k++ )
         {
-            Mat r = bigmat(Range(i, i+1), Range(0,3));
-            Mat t = bigmat(Range(i, i+1), Range(3,6));
+            const string& filename = imagelist[i*2+k];
 
-            CV_Assert(rvecs[i].rows == 3 && rvecs[i].cols == 1);
-            CV_Assert(tvecs[i].rows == 3 && tvecs[i].cols == 1);
-            //*.t() is MatExpr (not Mat) so we can use assignment operator
-            r = rvecs[i].t();
-            t = tvecs[i].t();
+			std::cout << "filename: " << filename << std::endl;
+
+            Mat img = imread(filename, 0);
+            if(img.empty())
+                break;
+            if( imageSize == Size() )
+                imageSize = img.size();
+            else if( img.size() != imageSize )
+            {
+                cout << "The image " << filename << " has the size different from the first image size. Skipping the pair\n";
+                break;
+            }
+            bool found = false;
+            vector<Point2f>& corners = imagePoints[k][j];
+            for( int scale = 1; scale <= maxScale; scale++ )
+            {
+                Mat timg;
+                if( scale == 1 )
+                    timg = img;
+                else
+                    resize(img, timg, Size(), scale, scale);
+                found = findChessboardCorners(timg, boardSize, corners,
+                    CV_CALIB_CB_ADAPTIVE_THRESH | CV_CALIB_CB_NORMALIZE_IMAGE);
+                if( found )
+                {
+                    if( scale > 1 )
+                    {
+                        Mat cornersMat(corners);
+                        cornersMat *= 1./scale;
+                    }
+                    break;
+                }
+            }
+            if( displayCorners )
+            {
+                cout << filename << endl;
+                Mat cimg, cimg1;
+                cvtColor(img, cimg, COLOR_GRAY2BGR);
+                drawChessboardCorners(cimg, boardSize, corners, found);
+                double sf = 640./MAX(img.rows, img.cols);
+                resize(cimg, cimg1, Size(), sf, sf);
+                imshow("corners", cimg1);
+                char c = (char)waitKey(500);
+                if( c == 27 || c == 'q' || c == 'Q' ) //Allow ESC to quit
+                    exit(-1);
+            }
+            else
+                putchar('.');
+            if( !found )
+                break;
+            cornerSubPix(img, corners, Size(11,11), Size(-1,-1),
+                         TermCriteria(CV_TERMCRIT_ITER+CV_TERMCRIT_EPS,
+                                      30, 0.01));
         }
-        cvWriteComment( *fs, "a set of 6-tuples (rotation vector + translation vector) for each view", 0 );
-        fs << "Extrinsic_Parameters" << bigmat;
+        if( k == 2 )
+        {
+            goodImageList.push_back(imagelist[i*2]);
+            goodImageList.push_back(imagelist[i*2+1]);
+            j++;
+        }
+    }
+    cout << j << " pairs have been successfully detected.\n";
+    nimages = j;
+    if( nimages < 2 )
+    {
+        cout << "Error: too little pairs to run the calibration\n";
+        return;
     }
 
-    if( !imagePoints.empty() )
+    imagePoints[0].resize(nimages);
+    imagePoints[1].resize(nimages);
+    objectPoints.resize(nimages);
+
+    for( i = 0; i < nimages; i++ )
     {
-        Mat imagePtMat((int)imagePoints.size(), (int)imagePoints[0].size(), CV_32FC2);
-        for( int i = 0; i < (int)imagePoints.size(); i++ )
+        for( j = 0; j < boardSize.height; j++ )
+            for( k = 0; k < boardSize.width; k++ )
+                objectPoints[i].push_back(Point3f(j*squareSize, k*squareSize, 0));
+    }
+
+    cout << "Running stereo calibration ...\n";
+
+    Mat cameraMatrix[2], distCoeffs[2];
+    cameraMatrix[0] = Mat::eye(3, 3, CV_64F);
+    cameraMatrix[1] = Mat::eye(3, 3, CV_64F);
+    Mat R, T, E, F;
+
+    double rms = stereoCalibrate(objectPoints, imagePoints[0], imagePoints[1],
+                    cameraMatrix[0], distCoeffs[0],
+                    cameraMatrix[1], distCoeffs[1],
+                    imageSize, R, T, E, F,
+                    TermCriteria(CV_TERMCRIT_ITER+CV_TERMCRIT_EPS, 100, 1e-5),
+                    CV_CALIB_FIX_ASPECT_RATIO +
+                    CV_CALIB_ZERO_TANGENT_DIST +
+                    CV_CALIB_SAME_FOCAL_LENGTH +
+                    CV_CALIB_RATIONAL_MODEL +
+                    CV_CALIB_FIX_K3 + CV_CALIB_FIX_K4 + CV_CALIB_FIX_K5);
+    cout << "done with RMS error=" << rms << endl;
+
+// CALIBRATION QUALITY CHECK
+// because the output fundamental matrix implicitly
+// includes all the output information,
+// we can check the quality of calibration using the
+// epipolar geometry constraint: m2^t*F*m1=0
+    double err = 0;
+    int npoints = 0;
+    vector<Vec3f> lines[2];
+    for( i = 0; i < nimages; i++ )
+    {
+        int npt = (int)imagePoints[0][i].size();
+        Mat imgpt[2];
+        for( k = 0; k < 2; k++ )
         {
-            Mat r = imagePtMat.row(i).reshape(2, imagePtMat.cols);
-            Mat imgpti(imagePoints[i]);
-            imgpti.copyTo(r);
+            imgpt[k] = Mat(imagePoints[k][i]);
+            undistortPoints(imgpt[k], imgpt[k], cameraMatrix[k], distCoeffs[k], Mat(), cameraMatrix[k]);
+            computeCorrespondEpilines(imgpt[k], k+1, F, lines[k]);
         }
-        fs << "Image_points" << imagePtMat;
+        for( j = 0; j < npt; j++ )
+        {
+            double errij = fabs(imagePoints[0][i][j].x*lines[1][j][0] +
+                                imagePoints[0][i][j].y*lines[1][j][1] + lines[1][j][2]) +
+                           fabs(imagePoints[1][i][j].x*lines[0][j][0] +
+                                imagePoints[1][i][j].y*lines[0][j][1] + lines[0][j][2]);
+            err += errij;
+        }
+        npoints += npt;
+    }
+    cout << "average reprojection err = " <<  err/npoints << endl;
+
+    // save intrinsic parameters
+    FileStorage fs("intrinsics.yml", CV_STORAGE_WRITE);
+    if( fs.isOpened() )
+    {
+        fs << "M1" << cameraMatrix[0] << "D1" << distCoeffs[0] <<
+            "M2" << cameraMatrix[1] << "D2" << distCoeffs[1];
+        fs.release();
+    }
+    else
+        cout << "Error: can not save the intrinsic parameters\n";
+
+    Mat R1, R2, P1, P2, Q;
+    Rect validRoi[2];
+
+    stereoRectify(cameraMatrix[0], distCoeffs[0],
+                  cameraMatrix[1], distCoeffs[1],
+                  imageSize, R, T, R1, R2, P1, P2, Q,
+                  CALIB_ZERO_DISPARITY, 1, imageSize, &validRoi[0], &validRoi[1]);
+
+    fs.open("extrinsics.yml", CV_STORAGE_WRITE);
+    if( fs.isOpened() )
+    {
+        fs << "R" << R << "T" << T << "R1" << R1 << "R2" << R2 << "P1" << P1 << "P2" << P2 << "Q" << Q;
+        fs.release();
+    }
+    else
+        cout << "Error: can not save the intrinsic parameters\n";
+
+    // OpenCV can handle left-right
+    // or up-down camera arrangements
+    bool isVerticalStereo = fabs(P2.at<double>(1, 3)) > fabs(P2.at<double>(0, 3));
+
+// COMPUTE AND DISPLAY RECTIFICATION
+    if( !showRectified )
+        return;
+
+    Mat rmap[2][2];
+// IF BY CALIBRATED (BOUGUET'S METHOD)
+    if( useCalibrated )
+    {
+        // we already computed everything
+    }
+// OR ELSE HARTLEY'S METHOD
+    else
+ // use intrinsic parameters of each camera, but
+ // compute the rectification transformation directly
+ // from the fundamental matrix
+    {
+        vector<Point2f> allimgpt[2];
+        for( k = 0; k < 2; k++ )
+        {
+            for( i = 0; i < nimages; i++ )
+                std::copy(imagePoints[k][i].begin(), imagePoints[k][i].end(), back_inserter(allimgpt[k]));
+        }
+        F = findFundamentalMat(Mat(allimgpt[0]), Mat(allimgpt[1]), FM_8POINT, 0, 0);
+        Mat H1, H2;
+        stereoRectifyUncalibrated(Mat(allimgpt[0]), Mat(allimgpt[1]), F, imageSize, H1, H2, 3);
+
+        R1 = cameraMatrix[0].inv()*H1*cameraMatrix[0];
+        R2 = cameraMatrix[1].inv()*H2*cameraMatrix[1];
+        P1 = cameraMatrix[0];
+        P2 = cameraMatrix[1];
+    }
+
+    //Precompute maps for cv::remap()
+    initUndistortRectifyMap(cameraMatrix[0], distCoeffs[0], R1, P1, imageSize, CV_16SC2, rmap[0][0], rmap[0][1]);
+    initUndistortRectifyMap(cameraMatrix[1], distCoeffs[1], R2, P2, imageSize, CV_16SC2, rmap[1][0], rmap[1][1]);
+
+    Mat canvas;
+    double sf;
+    int w, h;
+    if( !isVerticalStereo )
+    {
+        sf = 600./MAX(imageSize.width, imageSize.height);
+        w = cvRound(imageSize.width*sf);
+        h = cvRound(imageSize.height*sf);
+        canvas.create(h, w*2, CV_8UC3);
+    }
+    else
+    {
+        sf = 300./MAX(imageSize.width, imageSize.height);
+        w = cvRound(imageSize.width*sf);
+        h = cvRound(imageSize.height*sf);
+        canvas.create(h*2, w, CV_8UC3);
+    }
+
+	std::cout << "show rectified images, nimages = " << nimages << std::endl;
+    for( i = 0; i < nimages; i++ )
+    {
+        for( k = 0; k < 2; k++ )
+        {
+            Mat img = imread(goodImageList[i*2+k], 0), rimg, cimg;
+
+            remap(img, rimg, rmap[k][0], rmap[k][1], CV_INTER_LINEAR);
+			
+			cvtColor(rimg, cimg, COLOR_GRAY2BGR);
+
+            Mat canvasPart = !isVerticalStereo ? canvas(Rect(w*k, 0, w, h)) : canvas(Rect(0, h*k, w, h));
+            resize(cimg, canvasPart, canvasPart.size(), 0, 0, CV_INTER_AREA);
+            if( useCalibrated )
+            {
+                Rect vroi(cvRound(validRoi[k].x*sf), cvRound(validRoi[k].y*sf),
+                          cvRound(validRoi[k].width*sf), cvRound(validRoi[k].height*sf));
+                rectangle(canvasPart, vroi, Scalar(0,0,255), 3, 8);
+            }
+        }
+
+        if( !isVerticalStereo )
+            for( j = 0; j < canvas.rows; j += 16 )
+                line(canvas, Point(0, j), Point(canvas.cols, j), Scalar(0, 255, 0), 1, 8);
+        else
+            for( j = 0; j < canvas.cols; j += 16 )
+                line(canvas, Point(j, 0), Point(j, canvas.rows), Scalar(0, 255, 0), 1, 8);
+        imshow("rectified", canvas);
+        char c = (char)waitKey();
+        if( c == 27 || c == 'q' || c == 'Q' )
+            break;
     }
 }
 
-bool runCalibrationAndSave(Settings& s, Size imageSize, Mat&  cameraMatrix, Mat& distCoeffs,vector<vector<Point2f> > imagePoints )
+static bool readStringList( const string& filename, vector<string>& l )
 {
-    vector<Mat> rvecs, tvecs;
-    vector<float> reprojErrs;
-    double totalAvgErr = 0;
+    l.resize(0);
+    FileStorage fs(filename, FileStorage::READ);
+    if( !fs.isOpened() )
+        return false;
+    FileNode n = fs.getFirstTopLevelNode();
+    if( n.type() != FileNode::SEQ )
+        return false;
+    FileNodeIterator it = n.begin(), it_end = n.end();
+    for( ; it != it_end; ++it )
+        l.push_back((string)*it);
+    return true;
+}
 
-    bool ok = runCalibration(s,imageSize, cameraMatrix, distCoeffs, imagePoints, rvecs, tvecs,
-                             reprojErrs, totalAvgErr);
-    cout << (ok ? "Calibration succeeded" : "Calibration failed")
-        << ". avg re projection error = "  << totalAvgErr ;
+int main(int argc, char** argv)
+{
+    Size boardSize;
+    string imagelistfn;
+    bool showRectified = true;
 
-    if( ok )
-        saveCameraParams( s, imageSize, cameraMatrix, distCoeffs, rvecs ,tvecs, reprojErrs,
-                            imagePoints, totalAvgErr);
-    return ok;
+    for( int i = 1; i < argc; i++ )
+    {
+        if( string(argv[i]) == "-w" )
+        {
+            if( sscanf(argv[++i], "%d", &boardSize.width) != 1 || boardSize.width <= 0 )
+            {
+                cout << "invalid board width" << endl;
+                return print_help();
+            }
+        }
+        else if( string(argv[i]) == "-h" )
+        {
+            if( sscanf(argv[++i], "%d", &boardSize.height) != 1 || boardSize.height <= 0 )
+            {
+                cout << "invalid board height" << endl;
+                return print_help();
+            }
+        }
+        else if( string(argv[i]) == "-nr" )
+            showRectified = false;
+        else if( string(argv[i]) == "--help" )
+            return print_help();
+        else if( argv[i][0] == '-' )
+        {
+            cout << "invalid option " << argv[i] << endl;
+            return 0;
+        }
+        else
+            imagelistfn = argv[i];
+    }
+
+    if( imagelistfn == "" )
+    {
+        imagelistfn = "stereo_calib.xml";
+        boardSize = Size(9, 6);
+    }
+    else if( boardSize.width <= 0 || boardSize.height <= 0 )
+    {
+        cout << "if you specified XML file with chessboards, you should also specify the board width and height (-w and -h options)" << endl;
+        return 0;
+    }
+
+    vector<string> imagelist;
+    bool ok = readStringList(imagelistfn, imagelist);
+    if(!ok || imagelist.empty())
+    {
+        cout << "can not open " << imagelistfn << " or the string list is empty" << endl;
+        return print_help();
+    }
+
+    StereoCalib(imagelist, boardSize, true, showRectified);
+    return 0;
 }
