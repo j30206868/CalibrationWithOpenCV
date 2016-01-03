@@ -2,6 +2,7 @@ Debug/*
 Release/*
 calib_img/*
 calibrated/*
+calibration/*
 main.exe
 main.o
 makefile
