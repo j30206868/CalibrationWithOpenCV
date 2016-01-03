@@ -1,5 +1,12 @@
 Debug/*
 Release/*
+calib_img/*
+calibrated/*
+main.exe
+main.o
+makefile
+raw/*
+test/*
 *.png
 *.xml
 *.yml
