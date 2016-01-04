@@ -388,7 +388,7 @@ int main(int argc, char** argv)
     if( imagelistfn == "" )
     {
         imagelistfn = "stereo_calib.xml";
-        boardSize = Size(9, 6);
+        boardSize = Size(13, 9);
     }
     else if( boardSize.width <= 0 || boardSize.height <= 0 )
     {

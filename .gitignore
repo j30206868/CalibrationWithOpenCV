@@ -4,6 +4,8 @@ xml/*
 xmls/*
 calibration/*
 calib_img/*
+calibrated/*
+raw/*
 main.o
 main.exe
 makefile
